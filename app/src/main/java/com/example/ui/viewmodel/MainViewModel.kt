@@ -208,6 +208,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _googleEmail.value = email
     }
 
+    fun googleSignIn(email: String, token: String) {
+        prefs.googleUserEmail = email
+        prefs.googleAccessToken = token
+        _googleEmail.value = email
+        prefs.isCalendarSyncEnabled = true
+        _isCalendarSyncEnabled.value = true
+    }
+
     fun googleSignOut() {
         prefs.googleUserEmail = null
         prefs.googleAccessToken = null

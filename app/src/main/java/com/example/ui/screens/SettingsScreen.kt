@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.MainViewModel
+import kotlinx.coroutines.launch
 
 @Composable
 fun SettingsScreen(viewModel: MainViewModel) {
@@ -32,10 +33,97 @@ fun SettingsScreen(viewModel: MainViewModel) {
     val googleEmail by viewModel.googleEmail.collectAsState()
 
     var customKeyInput by remember { mutableStateOf(viewModel.prefs.customGeminiKey ?: "") }
-    var mockEmailInput by remember { mutableStateOf("") }
-    var mockTokenInput by remember { mutableStateOf("") }
-
     var showResetDialog by remember { mutableStateOf(false) }
+
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+    var authError by remember { mutableStateOf<String?>(null) }
+    var isSigningIn by remember { mutableStateOf(false) }
+
+    val gso = remember {
+        com.google.android.gms.auth.api.signin.GoogleSignInOptions.Builder(com.google.android.gms.auth.api.signin.GoogleSignInOptions.DEFAULT_SIGN_IN)
+            .requestEmail()
+            .requestScopes(com.google.android.gms.common.api.Scope("https://www.googleapis.com/auth/calendar.events"))
+            .build()
+    }
+    val googleSignInClient = remember {
+        com.google.android.gms.auth.api.signin.GoogleSignIn.getClient(context, gso)
+    }
+
+    // Resolve recovering permission user prompt
+    val recoveryLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == android.app.Activity.RESULT_OK) {
+            val account = com.google.android.gms.auth.api.signin.GoogleSignIn.getLastSignedInAccount(context)
+            if (account != null && account.email != null) {
+                coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                    try {
+                        isSigningIn = true
+                        val scopeStr = "oauth2:https://www.googleapis.com/auth/calendar.events"
+                        val token = com.google.android.gms.auth.GoogleAuthUtil.getToken(
+                            context,
+                            account.account ?: android.accounts.Account(account.email!!, "com.google"),
+                            scopeStr
+                        )
+                        viewModel.googleSignIn(account.email!!, token)
+                        authError = null
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                        authError = "Failed after authorization: ${e.message}"
+                    } finally {
+                        isSigningIn = false
+                    }
+                }
+            }
+        } else {
+            authError = "Authorization denied by user."
+            isSigningIn = false
+        }
+    }
+
+    val signInLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == android.app.Activity.RESULT_OK) {
+            val task = com.google.android.gms.auth.api.signin.GoogleSignIn.getSignedInAccountFromIntent(result.data)
+            try {
+                val account = task.getResult(com.google.android.gms.common.api.ApiException::class.java)
+                val email = account?.email
+                if (account != null && email != null) {
+                    coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                        try {
+                            isSigningIn = true
+                            val scopeStr = "oauth2:https://www.googleapis.com/auth/calendar.events"
+                            val token = com.google.android.gms.auth.GoogleAuthUtil.getToken(
+                                context,
+                                account.account ?: android.accounts.Account(email, "com.google"),
+                                scopeStr
+                            )
+                            viewModel.googleSignIn(email, token)
+                            authError = null
+                        } catch (e: com.google.android.gms.auth.UserRecoverableAuthException) {
+                            e.intent?.let { recoveryLauncher.launch(it) } ?: run {
+                                authError = "User action required but recovery intent is null."
+                            }
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                            authError = "OAuth Error: ${e.message}"
+                        } finally {
+                            isSigningIn = false
+                        }
+                    }
+                } else {
+                    authError = "Google account details not found."
+                }
+            } catch (e: com.google.android.gms.common.api.ApiException) {
+                e.printStackTrace()
+                authError = "Sign-In Failed: Code ${e.statusCode}"
+            }
+        } else {
+            authError = "Google Sign-In cancelled."
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -160,47 +248,39 @@ fun SettingsScreen(viewModel: MainViewModel) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
                         fontSize = 12.sp
                     )
-                    OutlinedTextField(
-                        value = mockEmailInput,
-                        onValueChange = { mockEmailInput = it },
-                        label = { Text("Google Account Email") },
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = MaterialTheme.colorScheme.primary,
-                            unfocusedBorderColor = MaterialTheme.colorScheme.outline,
-                            focusedTextColor = MaterialTheme.colorScheme.onSurface,
-                            unfocusedTextColor = MaterialTheme.colorScheme.onSurface
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("mock_email_input")
-                    )
-                    OutlinedTextField(
-                        value = mockTokenInput,
-                        onValueChange = { mockTokenInput = it },
-                        label = { Text("OAuth Access Token") },
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = MaterialTheme.colorScheme.primary,
-                            unfocusedBorderColor = MaterialTheme.colorScheme.outline,
-                            focusedTextColor = MaterialTheme.colorScheme.onSurface,
-                            unfocusedTextColor = MaterialTheme.colorScheme.onSurface
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("mock_token_input")
-                    )
-                    Button(
-                        onClick = {
-                            if (mockEmailInput.isNotEmpty() && mockTokenInput.isNotEmpty()) {
-                                viewModel.mockGoogleSignIn(mockEmailInput, mockTokenInput)
-                                viewModel.setCalendarSyncEnabled(true)
-                            }
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary, contentColor = Color.White),
-                        modifier = Modifier
-                            .align(Alignment.End)
-                            .testTag("connect_google_btn")
-                    ) {
-                        Text("CONNECT CALENDAR", fontWeight = FontWeight.Bold)
+                    
+                    if (isSigningIn) {
+                        Box(
+                            modifier = Modifier.fillMaxWidth().padding(16.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                        }
+                    } else {
+                        Button(
+                            onClick = {
+                                signInLauncher.launch(googleSignInClient.signInIntent)
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = Color.White
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(48.dp)
+                                .testTag("connect_google_btn")
+                        ) {
+                            Text("SIGN IN WITH GOOGLE", fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    authError?.let { err ->
+                        Text(
+                            text = err,
+                            color = MaterialTheme.colorScheme.error,
+                            fontSize = 12.sp,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
                     }
                 } else {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -235,7 +315,11 @@ fun SettingsScreen(viewModel: MainViewModel) {
                             )
                         }
                         Button(
-                            onClick = { viewModel.googleSignOut() },
+                            onClick = {
+                                googleSignInClient.signOut().addOnCompleteListener {
+                                    viewModel.googleSignOut()
+                                }
+                            },
                             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error, contentColor = Color.White),
                             modifier = Modifier.align(Alignment.End)
                         ) {
