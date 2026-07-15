@@ -1,0 +1,6 @@
+{
+  "name": "KRONOS",
+  "description": "AI-powered weekly schedule manager with custom exact alarms and Google Calendar sync.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
