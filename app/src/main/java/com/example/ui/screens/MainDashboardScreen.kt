@@ -21,6 +21,13 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import coil.compose.rememberAsyncImagePainter
+import androidx.compose.material.icons.filled.Person
 import com.example.data.model.ScheduleEvent
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.MainViewModel
@@ -30,6 +37,11 @@ import java.util.*
 @Composable
 fun MainDashboardScreen(viewModel: MainViewModel) {
     val events by viewModel.events.collectAsState()
+    val context = LocalContext.current
+    val googleEmail by viewModel.googleEmail.collectAsState()
+    val googleAccount = remember(googleEmail) {
+        com.google.android.gms.auth.api.signin.GoogleSignIn.getLastSignedInAccount(context)
+    }
     var selectedDay by remember { mutableStateOf("Monday") }
     var showAddDialog by remember { mutableStateOf(false) }
     var editingEvent by remember { mutableStateOf<ScheduleEvent?>(null) }
@@ -38,7 +50,18 @@ fun MainDashboardScreen(viewModel: MainViewModel) {
 
     val filteredEvents = events.filter {
         it.dayOfWeek.lowercase() == selectedDay.lowercase()
-    }.sortedBy { it.startTime }
+    }.sortedWith { a, b ->
+        val dateA = a.specificDate ?: ""
+        val dateB = b.specificDate ?: ""
+        val dateCompare = dateA.compareTo(dateB)
+        if (dateCompare != 0) {
+            if (dateA.isEmpty()) -1
+            else if (dateB.isEmpty()) 1
+            else dateCompare
+        } else {
+            a.startTime.compareTo(b.startTime)
+        }
+    }
 
     val nextEvent = remember(events) {
         findNextEvent(events)
@@ -97,18 +120,48 @@ fun MainDashboardScreen(viewModel: MainViewModel) {
                     )
                 }
 
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(20.dp)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "JD",
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                if (googleAccount != null) {
+                    val photoUrl = googleAccount.photoUrl
+                    if (photoUrl != null) {
+                        Image(
+                            painter = rememberAsyncImagePainter(model = photoUrl),
+                            contentDescription = "Google Profile Picture",
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(CircleShape)
+                                .border(1.dp, MaterialTheme.colorScheme.outline, CircleShape),
+                            contentScale = ContentScale.Crop
+                        )
+                    } else {
+                        val name = googleAccount.displayName ?: googleAccount.email ?: "User"
+                        val initials = name.take(2).uppercase()
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = initials,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .background(MaterialTheme.colorScheme.surfaceVariant, CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = androidx.compose.material.icons.Icons.Default.Person,
+                            contentDescription = "Guest Profile",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
             Text(
@@ -473,15 +526,33 @@ fun AddEditEventDialog(
                     }
                 }
 
+                val isDateError = specificDate.trim().isNotEmpty() && getDayOfWeekFromDateString(specificDate) == null
                 OutlinedTextField(
                     value = specificDate,
-                    onValueChange = { specificDate = it },
+                    onValueChange = { 
+                        specificDate = it 
+                        getDayOfWeekFromDateString(it)?.let { inferredDay ->
+                            selectedDay = inferredDay
+                        }
+                    },
                     label = { Text("One-off Date (YYYY-MM-DD) or empty") },
+                    isError = isDateError,
+                    supportingText = {
+                        if (isDateError) {
+                            Text("Must be in YYYY-MM-DD format", color = MaterialTheme.colorScheme.error)
+                        } else {
+                            val inferred = getDayOfWeekFromDateString(specificDate)
+                            if (inferred != null) {
+                                Text("Matches $inferred", color = MaterialTheme.colorScheme.primary)
+                            }
+                        }
+                    },
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = MaterialTheme.colorScheme.primary,
                         unfocusedBorderColor = MaterialTheme.colorScheme.outline,
                         focusedTextColor = MaterialTheme.colorScheme.onSurface,
-                        unfocusedTextColor = MaterialTheme.colorScheme.onSurface
+                        unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
+                        errorBorderColor = MaterialTheme.colorScheme.error
                     ),
                     modifier = Modifier.fillMaxWidth().testTag("event_date_input")
                 )
@@ -567,14 +638,16 @@ fun AddEditEventDialog(
             }
         },
         confirmButton = {
+            val isDateValid = specificDate.trim().isEmpty() || getDayOfWeekFromDateString(specificDate) != null
             Button(
                 onClick = {
-                    if (title.isNotEmpty()) {
+                    if (title.isNotEmpty() && isDateValid) {
+                        val finalDayOfWeek = getDayOfWeekFromDateString(specificDate) ?: selectedDay
                         onSave(
                             ScheduleEvent(
                                 id = event?.id ?: 0,
                                 title = title,
-                                dayOfWeek = selectedDay,
+                                dayOfWeek = finalDayOfWeek,
                                 specificDate = specificDate.trim().ifEmpty { null },
                                 startTime = startTime,
                                 endTime = endTime,
@@ -660,5 +733,29 @@ fun getEventTypeColor(type: String): Color {
         "SELF_STUDY" -> Color(0xFF2ECC71)
         "TEST" -> Color(0xFFB3261E)
         else -> Color(0xFF9B59B6)
+    }
+}
+
+fun getDayOfWeekFromDateString(dateStr: String): String? {
+    return try {
+        val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+        sdf.isLenient = false
+        val date = sdf.parse(dateStr.trim())
+        if (date != null) {
+            val cal = Calendar.getInstance()
+            cal.time = date
+            when (cal.get(Calendar.DAY_OF_WEEK)) {
+                Calendar.MONDAY -> "Monday"
+                Calendar.TUESDAY -> "Tuesday"
+                Calendar.WEDNESDAY -> "Wednesday"
+                Calendar.THURSDAY -> "Thursday"
+                Calendar.FRIDAY -> "Friday"
+                Calendar.SATURDAY -> "Saturday"
+                Calendar.SUNDAY -> "Sunday"
+                else -> null
+            }
+        } else null
+    } catch (e: Exception) {
+        null
     }
 }

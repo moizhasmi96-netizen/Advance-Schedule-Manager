@@ -2,6 +2,7 @@ package com.example.data
 
 import android.content.Context
 import com.example.alarm.AlarmScheduler
+import com.example.alarm.EventNotificationScheduler
 import com.example.data.local.AppDatabase
 import com.example.data.model.Alarm
 import com.example.data.model.ChatMessage
@@ -21,9 +22,21 @@ class ScheduleRepository(private val context: Context) {
     // Events
     val allEventsFlow: Flow<List<ScheduleEvent>> = eventDao.getAllEventsFlow()
 
+    suspend fun getAllEvents(): List<ScheduleEvent> {
+        return eventDao.getAllEvents()
+    }
+
     suspend fun insertEvent(event: ScheduleEvent) {
         val id = eventDao.insertEvent(event)
         val insertedEvent = event.copy(id = id.toInt())
+        
+        // Schedule pre-notification for the newly created event
+        EventNotificationScheduler.scheduleEventNotification(
+            context, 
+            insertedEvent, 
+            PrefsManager(context).activityPreNotifyHours
+        )
+
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val googleEventId = GoogleCalendarSyncService.syncEvent(context, insertedEvent)
@@ -38,10 +51,13 @@ class ScheduleRepository(private val context: Context) {
 
     suspend fun insertEvents(events: List<ScheduleEvent>) {
         eventDao.insertEvents(events)
+        val hoursBefore = PrefsManager(context).activityPreNotifyHours
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val all = eventDao.getAllEvents()
                 for (evt in all) {
+                    // Schedule pre-notifications for all newly imported/inserted events
+                    EventNotificationScheduler.scheduleEventNotification(context, evt, hoursBefore)
                     if (evt.googleEventId == null) {
                         val googleEventId = GoogleCalendarSyncService.syncEvent(context, evt)
                         if (googleEventId != null) {
@@ -57,6 +73,15 @@ class ScheduleRepository(private val context: Context) {
 
     suspend fun updateEvent(event: ScheduleEvent) {
         eventDao.updateEvent(event)
+        
+        // Cancel old and schedule new pre-notification
+        EventNotificationScheduler.cancelEventNotification(context, event)
+        EventNotificationScheduler.scheduleEventNotification(
+            context, 
+            event, 
+            PrefsManager(context).activityPreNotifyHours
+        )
+
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 if (event.googleEventId != null) {
@@ -74,6 +99,10 @@ class ScheduleRepository(private val context: Context) {
 
     suspend fun deleteEvent(event: ScheduleEvent) {
         eventDao.deleteEvent(event)
+        
+        // Cancel pre-notification upon event deletion
+        EventNotificationScheduler.cancelEventNotification(context, event)
+
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 if (event.googleEventId != null) {
@@ -90,6 +119,8 @@ class ScheduleRepository(private val context: Context) {
             try {
                 val all = eventDao.getAllEvents()
                 for (evt in all) {
+                    // Cancel pre-notifications for all events
+                    EventNotificationScheduler.cancelEventNotification(context, evt)
                     if (evt.googleEventId != null) {
                         GoogleCalendarSyncService.deleteEvent(context, evt.googleEventId)
                     }

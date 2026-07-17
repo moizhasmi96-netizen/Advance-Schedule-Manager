@@ -42,6 +42,7 @@ import coil.compose.rememberAsyncImagePainter
 import com.example.data.model.ScheduleEvent
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.MainViewModel
+import com.example.ui.components.AILockScreen
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 
@@ -49,6 +50,8 @@ import java.io.InputStream
 fun ImportScreen(viewModel: MainViewModel) {
     var activeTab by remember { mutableStateOf(0) } // 0: CSV, 1: AI Parse, 2: AI Chat
     val tabs = listOf("CSV IMPORT", "AI PARSE", "AI CHAT")
+    val customGeminiKey by viewModel.customGeminiKey.collectAsState()
+    val isAiUnlocked = !customGeminiKey.isNullOrBlank()
 
     Column(
         modifier = Modifier
@@ -88,10 +91,14 @@ fun ImportScreen(viewModel: MainViewModel) {
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        when (activeTab) {
-            0 -> CsvImportTab(viewModel)
-            1 -> AiParseTab(viewModel)
-            2 -> ChatTab(viewModel)
+        if ((activeTab == 1 || activeTab == 2) && !isAiUnlocked) {
+            AILockScreen(viewModel = viewModel)
+        } else {
+            when (activeTab) {
+                0 -> CsvImportTab(viewModel)
+                1 -> AiParseTab(viewModel)
+                2 -> ChatTab(viewModel)
+            }
         }
     }
 }

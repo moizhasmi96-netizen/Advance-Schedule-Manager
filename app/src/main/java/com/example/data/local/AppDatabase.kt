@@ -8,7 +8,7 @@ import com.example.data.model.Alarm
 import com.example.data.model.ChatMessage
 import com.example.data.model.ScheduleEvent
 
-@Database(entities = [ScheduleEvent::class, Alarm::class, ChatMessage::class], version = 1, exportSchema = false)
+@Database(entities = [ScheduleEvent::class, Alarm::class, ChatMessage::class], version = 2, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun scheduleEventDao(): ScheduleEventDao
     abstract fun alarmDao(): AlarmDao

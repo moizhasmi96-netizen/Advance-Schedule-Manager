@@ -12,7 +12,7 @@ import java.util.*
 
 object AlarmScheduler {
     fun scheduleNextAlarm(context: Context, alarm: Alarm) {
-        if (!alarm.isEnabled || alarm.days.isEmpty()) {
+        if (!alarm.isEnabled) {
             cancelAlarm(context, alarm)
             return
         }
@@ -63,6 +63,70 @@ object AlarmScheduler {
                 pendingIntent
             )
         }
+
+        // Schedule pre-reminder if configured
+        if (alarm.remindBeforeMinutes > 0) {
+            val preReminderTriggerTime = triggerTime - (alarm.remindBeforeMinutes * 60 * 1000)
+            if (preReminderTriggerTime > System.currentTimeMillis()) {
+                val preReminderIntent = Intent(context, AlarmReceiver::class.java).apply {
+                    putExtra("ALARM_ID", alarm.id)
+                    putExtra("ALARM_LABEL", alarm.label)
+                    putExtra("ALARM_HOUR", alarm.hour)
+                    putExtra("ALARM_MINUTE", alarm.minute)
+                    putExtra("IS_PRE_REMINDER", true)
+                    putExtra("PRE_REMINDER_MINUTES", alarm.remindBeforeMinutes)
+                }
+
+                val preReminderPendingIntent = PendingIntent.getBroadcast(
+                    context,
+                    alarm.id + 1000000,
+                    preReminderIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+
+                try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        if (alarmManager.canScheduleExactAlarms()) {
+                            alarmManager.setAlarmClock(
+                                AlarmManager.AlarmClockInfo(preReminderTriggerTime, preReminderPendingIntent),
+                                preReminderPendingIntent
+                            )
+                        } else {
+                            alarmManager.setExactAndAllowWhileIdle(
+                                AlarmManager.RTC_WAKEUP,
+                                preReminderTriggerTime,
+                                preReminderPendingIntent
+                            )
+                        }
+                    } else {
+                        alarmManager.setAlarmClock(
+                            AlarmManager.AlarmClockInfo(preReminderTriggerTime, preReminderPendingIntent),
+                            preReminderPendingIntent
+                        )
+                    }
+                    Log.d("AlarmScheduler", "Scheduled pre-reminder for alarm ${alarm.id} (${alarm.label}) for ${Date(preReminderTriggerTime)}")
+                } catch (e: SecurityException) {
+                    Log.e("AlarmScheduler", "SecurityException scheduling pre-reminder: ${e.message}")
+                    alarmManager.set(
+                        AlarmManager.RTC_WAKEUP,
+                        preReminderTriggerTime,
+                        preReminderPendingIntent
+                    )
+                }
+            } else {
+                val cancelIntent = Intent(context, AlarmReceiver::class.java)
+                val oldPreReminderPendingIntent = PendingIntent.getBroadcast(
+                    context,
+                    alarm.id + 1000000,
+                    cancelIntent,
+                    PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
+                )
+                if (oldPreReminderPendingIntent != null) {
+                    alarmManager.cancel(oldPreReminderPendingIntent)
+                    oldPreReminderPendingIntent.cancel()
+                }
+            }
+        }
     }
 
     fun cancelAlarm(context: Context, alarm: Alarm) {
@@ -78,11 +142,34 @@ object AlarmScheduler {
             alarmManager.cancel(pendingIntent)
             pendingIntent.cancel()
         }
+
+        val preReminderPendingIntent = PendingIntent.getBroadcast(
+            context,
+            alarm.id + 1000000,
+            intent,
+            PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
+        )
+        if (preReminderPendingIntent != null) {
+            alarmManager.cancel(preReminderPendingIntent)
+            preReminderPendingIntent.cancel()
+        }
     }
 
     fun calculateNextTriggerTime(hour: Int, minute: Int, daysStr: String): Long? {
         val days = daysStr.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-        if (days.isEmpty()) return null
+        if (days.isEmpty()) {
+            val now = Calendar.getInstance()
+            val candidate = Calendar.getInstance().apply {
+                set(Calendar.HOUR_OF_DAY, hour)
+                set(Calendar.MINUTE, minute)
+                set(Calendar.SECOND, 0)
+                set(Calendar.MILLISECOND, 0)
+            }
+            if (candidate.timeInMillis <= now.timeInMillis) {
+                candidate.add(Calendar.DAY_OF_YEAR, 1)
+            }
+            return candidate.timeInMillis
+        }
 
         val dayMap = mapOf(
             "Mon" to Calendar.MONDAY,

@@ -12,6 +12,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -164,7 +165,13 @@ fun AlarmItemCard(
     onCardClick: () -> Unit,
     onDeleteClick: () -> Unit
 ) {
-    val hourStr = String.format("%02d", alarm.hour)
+    val amPm = if (alarm.hour >= 12) "PM" else "AM"
+    val displayHour = when {
+        alarm.hour == 0 -> 12
+        alarm.hour > 12 -> alarm.hour - 12
+        else -> alarm.hour
+    }
+    val hourStr = String.format("%02d", displayHour)
     val minStr = String.format("%02d", alarm.minute)
 
     Card(
@@ -184,7 +191,7 @@ fun AlarmItemCard(
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "$hourStr:$minStr",
+                    text = "$hourStr:$minStr $amPm",
                     fontSize = 32.sp,
                     fontWeight = FontWeight.Bold,
                     color = if (alarm.isEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
@@ -197,11 +204,24 @@ fun AlarmItemCard(
                     fontWeight = FontWeight.Bold
                 )
                 Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = if (alarm.days.isEmpty()) "Single trigger" else alarm.days.replace(",", " | "),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                    fontSize = 12.sp
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = if (alarm.days.isEmpty()) "Single trigger" else alarm.days.replace(",", " | "),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        fontSize = 12.sp
+                    )
+                    if (alarm.remindBeforeMinutes > 0) {
+                        Text(
+                            text = "•  🔔 ${alarm.remindBeforeMinutes}m before",
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
             }
 
             Switch(
@@ -231,10 +251,20 @@ fun AddEditAlarmDialog(
     onDismiss: () -> Unit,
     onSave: (Alarm) -> Unit
 ) {
-    var hour by remember { mutableStateOf(alarm?.hour ?: 7) }
-    var minute by remember { mutableStateOf(alarm?.minute ?: 30) }
+    val initialHour24 = alarm?.hour ?: 7
+    val initialIsAm = initialHour24 < 12
+    val initialHour12 = when {
+        initialHour24 == 0 -> 12
+        initialHour24 > 12 -> initialHour24 - 12
+        else -> initialHour24
+    }
+
+    var hourInput by remember { mutableStateOf(String.format("%02d", initialHour12)) }
+    var minuteInput by remember { mutableStateOf(alarm?.minute?.let { String.format("%02d", it) } ?: "30") }
+    var isAm by remember { mutableStateOf(initialIsAm) }
     var label by remember { mutableStateOf(alarm?.label ?: "Wake Up") }
     var vibrate by remember { mutableStateOf(alarm?.vibrate ?: true) }
+    var remindBeforeMinutes by remember { mutableStateOf(alarm?.remindBeforeMinutes ?: 0) }
 
     val daysList = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
     val selectedDays = remember {
@@ -272,8 +302,17 @@ fun AddEditAlarmDialog(
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text("HOUR", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                         OutlinedTextField(
-                            value = hour.toString(),
-                            onValueChange = { hour = it.toIntOrNull()?.coerceIn(0, 23) ?: 0 },
+                            value = hourInput,
+                            onValueChange = { input ->
+                                if (input.isEmpty()) {
+                                    hourInput = input
+                                } else if (input.all { it.isDigit() } && input.length <= 2) {
+                                    val num = input.toIntOrNull()
+                                    if (num != null && num <= 12) {
+                                        hourInput = input
+                                    }
+                                }
+                            },
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedTextColor = MaterialTheme.colorScheme.onSurface,
                                 unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
@@ -283,12 +322,21 @@ fun AddEditAlarmDialog(
                             modifier = Modifier.width(68.dp).testTag("alarm_hour_input")
                         )
                     }
-                    Text(":", fontSize = 24.sp, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.padding(horizontal = 10.dp))
+                    Text(":", fontSize = 24.sp, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.padding(horizontal = 8.dp))
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text("MINUTE", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                         OutlinedTextField(
-                            value = minute.toString(),
-                            onValueChange = { minute = it.toIntOrNull()?.coerceIn(0, 59) ?: 0 },
+                            value = minuteInput,
+                            onValueChange = { input ->
+                                if (input.isEmpty()) {
+                                    minuteInput = input
+                                } else if (input.all { it.isDigit() } && input.length <= 2) {
+                                    val num = input.toIntOrNull()
+                                    if (num != null && num <= 59) {
+                                        minuteInput = input
+                                    }
+                                }
+                            },
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedTextColor = MaterialTheme.colorScheme.onSurface,
                                 unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
@@ -297,6 +345,62 @@ fun AddEditAlarmDialog(
                             ),
                             modifier = Modifier.width(68.dp).testTag("alarm_minute_input")
                         )
+                    }
+
+                    Spacer(modifier = Modifier.width(16.dp))
+
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("AM/PM", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        Row(
+                            modifier = Modifier
+                                .width(96.dp)
+                                .height(56.dp)
+                                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(8.dp)),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxHeight()
+                                    .weight(1f)
+                                    .background(
+                                        if (isAm) MaterialTheme.colorScheme.primary else Color.Transparent,
+                                        RoundedCornerShape(topStart = 7.dp, bottomStart = 7.dp)
+                                    )
+                                    .clickable { isAm = true },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "AM",
+                                    color = if (isAm) Color.White else MaterialTheme.colorScheme.onSurface,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxHeight()
+                                    .width(1.dp)
+                                    .background(MaterialTheme.colorScheme.outline)
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxHeight()
+                                    .weight(1f)
+                                    .background(
+                                        if (!isAm) MaterialTheme.colorScheme.primary else Color.Transparent,
+                                        RoundedCornerShape(topEnd = 7.dp, bottomEnd = 7.dp)
+                                    )
+                                    .clickable { isAm = false },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "PM",
+                                    color = if (!isAm) Color.White else MaterialTheme.colorScheme.onSurface,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
                     }
                 }
 
@@ -353,6 +457,65 @@ fun AddEditAlarmDialog(
                     }
                 }
 
+                // Remembrance Pre-Reminder Selection
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                ) {
+                    Text(
+                        text = "Remembrance Pre-Reminder",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    var showDropdown by remember { mutableStateOf(false) }
+                    val reminderOptions = listOf(
+                        0 to "Don't remind me before",
+                        5 to "5 minutes before",
+                        10 to "10 minutes before",
+                        15 to "15 minutes before",
+                        30 to "30 minutes before"
+                    )
+                    val selectedOptionText = reminderOptions.firstOrNull { it.first == remindBeforeMinutes }?.second ?: "None"
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(8.dp))
+                            .clickable { showDropdown = true }
+                            .padding(horizontal = 14.dp, vertical = 12.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(text = selectedOptionText, color = MaterialTheme.colorScheme.onSurface, fontSize = 14.sp)
+                            Icon(
+                                imageVector = Icons.Default.ArrowDropDown,
+                                contentDescription = "Dropdown Arrow",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        DropdownMenu(
+                            expanded = showDropdown,
+                            onDismissRequest = { showDropdown = false },
+                            modifier = Modifier.fillMaxWidth(0.7f).background(MaterialTheme.colorScheme.surface)
+                        ) {
+                            reminderOptions.forEach { (mins, labelText) ->
+                                DropdownMenuItem(
+                                    text = { Text(labelText, color = MaterialTheme.colorScheme.onSurface) },
+                                    onClick = {
+                                        remindBeforeMinutes = mins
+                                        showDropdown = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
@@ -372,15 +535,26 @@ fun AddEditAlarmDialog(
         confirmButton = {
             Button(
                 onClick = {
+                    val enteredHour12 = hourInput.toIntOrNull()?.coerceIn(1, 12) ?: 12
+                    val finalMinute = minuteInput.toIntOrNull()?.coerceIn(0, 59) ?: 0
+                    val finalHour = when {
+                        isAm -> {
+                            if (enteredHour12 == 12) 0 else enteredHour12
+                        }
+                        else -> {
+                            if (enteredHour12 == 12) 12 else enteredHour12 + 12
+                        }
+                    }
                     onSave(
                         Alarm(
                             id = alarm?.id ?: 0,
-                            hour = hour,
-                            minute = minute,
+                            hour = finalHour,
+                            minute = finalMinute,
                             label = label,
                             isEnabled = true,
                             days = selectedDays.joinToString(","),
-                            vibrate = vibrate
+                            vibrate = vibrate,
+                            remindBeforeMinutes = remindBeforeMinutes
                         )
                     )
                     onDismiss()

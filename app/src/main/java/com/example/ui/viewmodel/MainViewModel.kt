@@ -56,6 +56,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _googleEmail = MutableStateFlow(prefs.googleUserEmail)
     val googleEmail = _googleEmail.asStateFlow()
 
+    private val _hasShownApiKeyOnboarding = MutableStateFlow(prefs.hasShownApiKeyOnboarding)
+    val hasShownApiKeyOnboarding = _hasShownApiKeyOnboarding.asStateFlow()
+
+    private val _customGeminiKey = MutableStateFlow(prefs.customGeminiKey)
+    val customGeminiKey = _customGeminiKey.asStateFlow()
+
+    private val _activityPreNotifyHours = MutableStateFlow(prefs.activityPreNotifyHours)
+    val activityPreNotifyHours = _activityPreNotifyHours.asStateFlow()
+
+    fun setActivityPreNotifyHours(hours: Int) {
+        prefs.activityPreNotifyHours = hours
+        _activityPreNotifyHours.value = hours
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                val allEvents = repository.getAllEvents()
+                com.example.alarm.EventNotificationScheduler.rescheduleAllEventNotifications(
+                    getApplication(),
+                    allEvents,
+                    hours
+                )
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
     fun setCalendarSyncEnabled(enabled: Boolean) {
         prefs.isCalendarSyncEnabled = enabled
         _isCalendarSyncEnabled.value = enabled
@@ -72,7 +98,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun saveGeminiApiKey(key: String) {
-        prefs.customGeminiKey = key.trim().ifEmpty { null }
+        val trimmed = key.trim().ifEmpty { null }
+        prefs.customGeminiKey = trimmed
+        _customGeminiKey.value = trimmed
+    }
+
+    fun setHasShownApiKeyOnboarding(shown: Boolean) {
+        prefs.hasShownApiKeyOnboarding = shown
+        _hasShownApiKeyOnboarding.value = shown
     }
 
     fun getGeminiApiKey(): String {

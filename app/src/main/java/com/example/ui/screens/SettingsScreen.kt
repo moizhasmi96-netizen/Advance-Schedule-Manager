@@ -11,6 +11,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -368,6 +369,68 @@ fun SettingsScreen(viewModel: MainViewModel) {
                             uncheckedTrackColor = MaterialTheme.colorScheme.surfaceVariant
                         )
                     )
+                }
+
+                HorizontalDivider(
+                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                    thickness = 1.dp,
+                    modifier = Modifier.padding(vertical = 4.dp)
+                )
+
+                val activityPreNotifyHours by viewModel.activityPreNotifyHours.collectAsState()
+                var showNotifyHoursDropdown by remember { mutableStateOf(false) }
+
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = "Activity Pre-Notification Buffer",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(8.dp))
+                            .clickable { showNotifyHoursDropdown = true }
+                            .padding(horizontal = 14.dp, vertical = 12.dp)
+                            .testTag("activity_pre_notify_hours_selector")
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "$activityPreNotifyHours Hours Before Actual Time",
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontSize = 14.sp
+                            )
+                            Icon(
+                                imageVector = Icons.Default.ArrowDropDown,
+                                contentDescription = "Dropdown Arrow",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        DropdownMenu(
+                            expanded = showNotifyHoursDropdown,
+                            onDismissRequest = { showNotifyHoursDropdown = false },
+                            modifier = Modifier.fillMaxWidth(0.7f).background(MaterialTheme.colorScheme.surface)
+                        ) {
+                            val options = listOf(3, 4, 5)
+                            options.forEach { hours ->
+                                DropdownMenuItem(
+                                    text = { Text("$hours Hours Before", color = MaterialTheme.colorScheme.onSurface) },
+                                    onClick = {
+                                        viewModel.setActivityPreNotifyHours(hours)
+                                        showNotifyHoursDropdown = false
+                                    },
+                                    modifier = Modifier.testTag("pre_notify_option_$hours")
+                                )
+                            }
+                        }
+                    }
                 }
 
                 HorizontalDivider(

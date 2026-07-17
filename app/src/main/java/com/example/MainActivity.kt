@@ -28,6 +28,7 @@ import com.example.ui.screens.AlarmsScreen
 import com.example.ui.screens.ImportScreen
 import com.example.ui.screens.MainDashboardScreen
 import com.example.ui.screens.SettingsScreen
+import com.example.ui.components.GeminiOnboardingDialog
 import androidx.compose.ui.text.font.FontWeight
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.viewmodel.MainViewModel
@@ -58,6 +59,19 @@ class MainActivity : ComponentActivity() {
                 }
 
                 val navController = rememberNavController()
+                val hasShownOnboarding by viewModel.hasShownApiKeyOnboarding.collectAsState()
+
+                if (!hasShownOnboarding) {
+                    GeminiOnboardingDialog(
+                        onDismiss = {
+                            viewModel.setHasShownApiKeyOnboarding(true)
+                        },
+                        onSaveKey = { key ->
+                            viewModel.saveGeminiApiKey(key)
+                            viewModel.setHasShownApiKeyOnboarding(true)
+                        }
+                    )
+                }
 
                 Scaffold(
                     modifier = Modifier.fillMaxSize(),

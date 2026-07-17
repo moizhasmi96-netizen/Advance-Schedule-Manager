@@ -14,7 +14,17 @@ class PrefsManager(context: Context) {
         private const val KEY_IS_24_HOUR = "is_24_hour"
         private const val KEY_REMINDER_OFFSET = "reminder_offset"
         private const val KEY_THEME_MODE = "theme_mode"
+        private const val KEY_HAS_SHOWN_API_KEY_ONBOARDING = "has_shown_api_key_onboarding"
+        private const val KEY_ACTIVITY_PRE_NOTIFY_HOURS = "activity_pre_notify_hours"
     }
+
+    var activityPreNotifyHours: Int
+        get() = prefs.getInt(KEY_ACTIVITY_PRE_NOTIFY_HOURS, 4) // Default is 4 hours before (3 to 5 hours range)
+        set(value) = prefs.edit().putInt(KEY_ACTIVITY_PRE_NOTIFY_HOURS, value).apply()
+
+    var hasShownApiKeyOnboarding: Boolean
+        get() = prefs.getBoolean(KEY_HAS_SHOWN_API_KEY_ONBOARDING, false)
+        set(value) = prefs.edit().putBoolean(KEY_HAS_SHOWN_API_KEY_ONBOARDING, value).apply()
 
     var customGeminiKey: String?
         get() = prefs.getString(KEY_CUSTOM_GEMINI_KEY, null)

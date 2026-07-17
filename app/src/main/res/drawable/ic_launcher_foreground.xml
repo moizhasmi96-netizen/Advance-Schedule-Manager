@@ -3,6 +3,6 @@
     <item
         android:width="66dp"
         android:height="66dp"
-        android:drawable="@drawable/ic_kronos_launcher_1784139169990"
+        android:drawable="@drawable/img_app_icon_foreground"
         android:gravity="center" />
 </layer-list>
