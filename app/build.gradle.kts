@@ -1,4 +1,5 @@
 import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy
+import java.util.Properties
 
 plugins {
   alias(libs.plugins.android.application)
@@ -21,6 +22,7 @@ android {
     versionName = "1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    buildConfigField("String", "GEMINI_API_KEY", "\"${getSecretKey("GEMINI_API_KEY")}\"")
   }
 
   signingConfigs {
@@ -64,6 +66,7 @@ android {
 secrets {
   propertiesFileName = ".env"
   defaultPropertiesFileName = ".env.example"
+  ignoreList.add("GEMINI_API_KEY")
 }
 
 googleServices { missingGoogleServicesStrategy = MissingGoogleServicesStrategy.WARN }
@@ -133,4 +136,55 @@ dependencies {
   debugImplementation(libs.androidx.compose.ui.tooling)
   "ksp"(libs.androidx.room.compiler)
   "ksp"(libs.moshi.kotlin.codegen)
+}
+
+fun getSecretKey(keyName: String): String {
+    // 1. Try system environment
+    val envValue = System.getenv(keyName)
+    if (!envValue.isNullOrBlank()) return envValue
+
+    // 2. Try Gradle project properties
+    val propValue = project.findProperty(keyName) as? String
+    if (!propValue.isNullOrBlank()) return propValue
+
+    // 3. Try reading from .env file
+    val envFile = file("${rootDir}/.env")
+    if (envFile.exists()) {
+        try {
+            val properties = Properties()
+            envFile.inputStream().use { properties.load(it) }
+            val fileValue = properties.getProperty(keyName) as? String
+            if (!fileValue.isNullOrBlank()) return fileValue
+        } catch (e: Exception) {
+            // Ignore
+        }
+    }
+
+    // 4. Try reading from .env.example file
+    val exampleFile = file("${rootDir}/.env.example")
+    if (exampleFile.exists()) {
+        try {
+            val properties = Properties()
+            exampleFile.inputStream().use { properties.load(it) }
+            val fileValue = properties.getProperty(keyName) as? String
+            if (!fileValue.isNullOrBlank()) return fileValue
+        } catch (e: Exception) {
+            // Ignore
+        }
+    }
+
+    // 5. Try reading from local.properties
+    val localPropertiesFile = file("${rootDir}/local.properties")
+    if (localPropertiesFile.exists()) {
+        try {
+            val properties = Properties()
+            localPropertiesFile.inputStream().use { properties.load(it) }
+            val fileValue = properties.getProperty(keyName) as? String
+            if (!fileValue.isNullOrBlank()) return fileValue
+        } catch (e: Exception) {
+            // Ignore
+        }
+    }
+
+    return ""
 }

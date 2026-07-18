@@ -79,10 +79,10 @@ class AlarmRingActivity : ComponentActivity() {
             window.addFlags(
                 WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
                         WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD or
-                        WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
-                        WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+                        WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
             )
         }
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 
     private fun dismissAlarm(alarmId: Int) {
@@ -109,7 +109,7 @@ class AlarmRingActivity : ComponentActivity() {
             minute = calendar.get(Calendar.MINUTE),
             label = "$label [SNOOZED]",
             isEnabled = true,
-            days = getTodayDayShort()
+            days = "" // Empty days indicates a one-off/immediate alarm, which is perfect for snooze and avoids day-of-week rollover bugs
         )
 
         AlarmScheduler.scheduleNextAlarm(this, snoozeAlarm)

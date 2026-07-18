@@ -113,6 +113,58 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // Schedule CRUD
+    fun getOverlappingEvents(event: ScheduleEvent): List<ScheduleEvent> {
+        val list = events.value
+        val targetDay = event.dayOfWeek.trim().lowercase()
+        val targetDate = event.specificDate?.trim()
+
+        return list.filter { existing ->
+            // Skip checking against itself if we're editing
+            if (existing.id != 0 && existing.id == event.id) return@filter false
+
+            val existingDay = existing.dayOfWeek.trim().lowercase()
+            val existingDate = existing.specificDate?.trim()
+
+            // Check if they represent the same day
+            val isSameDay = (targetDay == existingDay) || 
+                            (!targetDate.isNullOrBlank() && !existingDate.isNullOrBlank() && targetDate == existingDate)
+
+            if (!isSameDay) return@filter false
+
+            // Check time overlaps
+            val existingStart = timeToMinutes(existing.startTime) ?: return@filter false
+            val existingEnd = timeToMinutes(existing.endTime) ?: return@filter false
+            val targetStart = timeToMinutes(event.startTime) ?: return@filter false
+            val targetEnd = timeToMinutes(event.endTime) ?: return@filter false
+
+            // Overlap check: start1 < end2 and end1 > start2
+            targetStart < existingEnd && targetEnd > existingStart
+        }
+    }
+
+    private fun timeToMinutes(timeStr: String): Int? {
+        val parts = timeStr.split(":")
+        if (parts.size >= 2) {
+            val h = parts[0].toIntOrNull() ?: return null
+            val m = parts[1].toIntOrNull() ?: return null
+            return h * 60 + m
+        }
+        return null
+    }
+
+    fun saveEventOverwritingConflicts(event: ScheduleEvent, conflictsToDelete: List<ScheduleEvent>) {
+        viewModelScope.launch {
+            conflictsToDelete.forEach { conflict ->
+                repository.deleteEvent(conflict)
+            }
+            if (event.id == 0) {
+                repository.insertEvent(event)
+            } else {
+                repository.updateEvent(event)
+            }
+        }
+    }
+
     fun addEvent(event: ScheduleEvent) {
         viewModelScope.launch {
             repository.insertEvent(event)
@@ -164,7 +216,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (inputStream != null) {
                     val parsed = CsvParserHelper.parseCsv(inputStream)
                     if (parsed.isNotEmpty()) {
-                        _parsedPreviewEvents.value = parsed
+                        val withDates = parsed.map { event ->
+                            if (event.specificDate.isNullOrBlank()) {
+                                event.copy(specificDate = com.example.service.GoogleCalendarSyncService.getNextDateForDayOfWeek(event.dayOfWeek))
+                            } else {
+                                event
+                            }
+                        }
+                        _parsedPreviewEvents.value = withDates
                     }
                 }
             } catch (e: Exception) {
@@ -191,9 +250,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun parseTextSchedule(text: String) {
         viewModelScope.launch {
             _isAILoading.value = true
-            val parsed = GeminiParserService.parseScheduleText(getGeminiApiKey(), text)
+            val sdf = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss (EEEE)", java.util.Locale.getDefault())
+            val currentTimeStr = sdf.format(java.util.Date())
+            val parsed = GeminiParserService.parseScheduleText(getGeminiApiKey(), text, currentTimeStr)
             if (parsed.isNotEmpty()) {
-                _parsedPreviewEvents.value = parsed
+                val withDates = parsed.map { event ->
+                    if (event.specificDate.isNullOrBlank()) {
+                        event.copy(specificDate = com.example.service.GoogleCalendarSyncService.getNextDateForDayOfWeek(event.dayOfWeek))
+                    } else {
+                        event
+                    }
+                }
+                _parsedPreviewEvents.value = withDates
             }
             _isAILoading.value = false
         }
@@ -204,9 +272,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _isAILoading.value = true
             val base64 = Base64.encodeToString(imageBytes, Base64.NO_WRAP)
-            val parsed = GeminiParserService.parseImageSchedule(getGeminiApiKey(), base64)
+            val sdf = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss (EEEE)", java.util.Locale.getDefault())
+            val currentTimeStr = sdf.format(java.util.Date())
+            val parsed = GeminiParserService.parseImageSchedule(getGeminiApiKey(), base64, currentTimeStr)
             if (parsed.isNotEmpty()) {
-                _parsedPreviewEvents.value = parsed
+                val withDates = parsed.map { event ->
+                    if (event.specificDate.isNullOrBlank()) {
+                        event.copy(specificDate = com.example.service.GoogleCalendarSyncService.getNextDateForDayOfWeek(event.dayOfWeek))
+                    } else {
+                        event
+                    }
+                }
+                _parsedPreviewEvents.value = withDates
             }
             _isAILoading.value = false
         }
@@ -221,9 +298,110 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             _isAILoading.value = true
             val history = chatMessages.value
-            val responseText = GeminiParserService.chatWithGemini(getGeminiApiKey(), history, msgText)
 
-            val aiMsg = ChatMessage(sender = "ai", message = responseText)
+            val sdf = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss (EEEE)", java.util.Locale.getDefault())
+            val currentTimeStr = sdf.format(java.util.Date())
+
+            val currentEventsText = events.value.joinToString("\n") { 
+                "- [ID: ${it.id}] ${it.title} on ${it.dayOfWeek} at ${it.startTime}-${it.endTime} (Type: ${it.eventType}, Date: ${it.specificDate ?: "Weekly"}, Location: ${it.location ?: "N/A"})"
+            }.ifEmpty { "None" }
+
+            val currentAlarmsText = alarms.value.joinToString("\n") { 
+                "- [ID: ${it.id}] Time: ${String.format("%02d:%02d", it.hour, it.minute)}, Label: ${it.label}, Days: ${it.days.ifEmpty { "One-time" }}, Enabled: ${it.isEnabled}"
+            }.ifEmpty { "None" }
+
+            val rawResponse = GeminiParserService.chatWithGemini(
+                getGeminiApiKey(),
+                history,
+                msgText,
+                currentEventsText,
+                currentAlarmsText,
+                currentTimeStr
+            )
+
+            var displayResponse = rawResponse
+            try {
+                var sanitized = rawResponse.trim()
+                if (sanitized.startsWith("```")) {
+                    sanitized = sanitized.substringAfter("\n").substringBeforeLast("```").trim()
+                }
+                if (sanitized.startsWith("json")) {
+                    sanitized = sanitized.substring(4).trim()
+                }
+
+                val jsonObj = org.json.JSONObject(sanitized)
+                displayResponse = jsonObj.optString("response", rawResponse)
+
+                val commandsArray = jsonObj.optJSONArray("commands")
+                if (commandsArray != null) {
+                    for (i in 0 until commandsArray.length()) {
+                        val cmd = commandsArray.getJSONObject(i)
+                        val action = cmd.optString("action")
+                        Log.d("MainViewModel", "Processing chatbot command: $action")
+                        when (action) {
+                            "ADD_ALARM" -> {
+                                val hour = cmd.optInt("hour")
+                                val minute = cmd.optInt("minute")
+                                val label = cmd.optString("label", "KRONOS Alarm")
+                                val days = cmd.optString("days", "")
+                                val alarm = Alarm(
+                                    hour = hour,
+                                    minute = minute,
+                                    label = label,
+                                    days = days,
+                                    isEnabled = true
+                                )
+                                repository.insertAlarm(alarm)
+                            }
+                            "DELETE_ALARM" -> {
+                                val label = cmd.optString("label", "")
+                                val hour = cmd.optInt("hour", -1)
+                                val minute = cmd.optInt("minute", -1)
+                                alarms.value.forEach { alarm ->
+                                    if ((label.isNotEmpty() && alarm.label.equals(label, ignoreCase = true)) || 
+                                        (hour != -1 && minute != -1 && alarm.hour == hour && alarm.minute == minute)) {
+                                        repository.deleteAlarm(alarm)
+                                    }
+                                }
+                            }
+                            "ADD_EVENT" -> {
+                                val title = cmd.optString("title", "Untitled Event")
+                                val dayOfWeek = cmd.optString("dayOfWeek", "Monday")
+                                val specificDate = if (cmd.isNull("specificDate")) null else cmd.optString("specificDate").ifEmpty { null }
+                                val startTime = cmd.optString("startTime", "09:00")
+                                val endTime = cmd.optString("endTime", "10:00")
+                                val eventType = cmd.optString("eventType", "OTHER")
+                                val location = if (cmd.isNull("location")) null else cmd.optString("location").ifEmpty { null }
+                                
+                                val event = ScheduleEvent(
+                                    title = title,
+                                    dayOfWeek = dayOfWeek,
+                                    specificDate = specificDate,
+                                    startTime = startTime,
+                                    endTime = endTime,
+                                    eventType = eventType,
+                                    location = location
+                                )
+                                repository.insertEvent(event)
+                            }
+                            "DELETE_EVENT" -> {
+                                val title = cmd.optString("title", "")
+                                if (title.isNotEmpty()) {
+                                    events.value.forEach { event ->
+                                        if (event.title.equals(title, ignoreCase = true)) {
+                                            repository.deleteEvent(event)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("MainViewModel", "Failed to parse chatbot command JSON: ${e.message}. Falling back to raw text.")
+            }
+
+            val aiMsg = ChatMessage(sender = "ai", message = displayResponse)
             repository.insertMessage(aiMsg)
             _isAILoading.value = false
         }

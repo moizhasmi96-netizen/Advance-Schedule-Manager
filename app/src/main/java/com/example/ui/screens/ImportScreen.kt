@@ -523,8 +523,9 @@ fun PreviewEventsSection(
                     ) {
                         Column {
                             Text(event.title, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                            val datePart = if (!event.specificDate.isNullOrBlank()) " (${event.specificDate})" else ""
                             Text(
-                                text = "🕐 ${event.dayOfWeek} | ${event.startTime} - ${event.endTime}",
+                                text = "🕐 ${event.dayOfWeek}$datePart | ${event.startTime} - ${event.endTime}",
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
                                 fontSize = 12.sp
                             )

@@ -16,22 +16,76 @@ object GoogleCalendarSyncService {
     private val client = OkHttpClient()
     private val mediaTypeJson = "application/json; charset=utf-8".toMediaType()
 
-    suspend fun syncEvent(context: Context, event: ScheduleEvent): String? {
+    private suspend fun getFreshAccessToken(context: Context): String? {
         val prefs = PrefsManager(context)
-        val token = prefs.googleAccessToken
-        if (token.isNullOrEmpty() || !prefs.isCalendarSyncEnabled) {
-            Log.d("CalendarSync", "Sync skipped. OAuth not connected or sync disabled.")
+        val account = com.google.android.gms.auth.api.signin.GoogleSignIn.getLastSignedInAccount(context)
+        if (account == null || account.email == null) {
+            Log.d("CalendarSync", "No Google account signed in.")
             return null
         }
 
-        val dateStr = if (event.specificDate != null) {
+        return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            val scopeStr = "oauth2:https://www.googleapis.com/auth/calendar.events"
+            val currentToken = prefs.googleAccessToken
+            try {
+                val emailAccount = account.account ?: android.accounts.Account(account.email!!, "com.google")
+                if (!currentToken.isNullOrEmpty()) {
+                    try {
+                        com.google.android.gms.auth.GoogleAuthUtil.clearToken(context, currentToken)
+                    } catch (e: Exception) {
+                        Log.w("CalendarSync", "Error clearing old token: ${e.message}")
+                    }
+                }
+                val freshToken = com.google.android.gms.auth.GoogleAuthUtil.getToken(context, emailAccount, scopeStr)
+                prefs.googleAccessToken = freshToken
+                Log.d("CalendarSync", "Successfully obtained fresh token.")
+                freshToken
+            } catch (e: Exception) {
+                Log.e("CalendarSync", "Failed to get fresh token: ${e.message}")
+                currentToken
+            }
+        }
+    }
+
+    fun formatRfc3339(dateStr: String, timeStr: String): String {
+        val parts = timeStr.trim().split(":")
+        val h = parts.getOrNull(0)?.toIntOrNull() ?: 0
+        val m = parts.getOrNull(1)?.toIntOrNull() ?: 0
+        val formattedTime = String.format("%02d:%02d:00", h, m)
+        
+        val tz = TimeZone.getDefault()
+        val cal = Calendar.getInstance(tz)
+        val offsetMillis = tz.getOffset(cal.timeInMillis)
+        val offsetHours = Math.abs(offsetMillis / 3600000)
+        val offsetMinutes = Math.abs((offsetMillis / 60000) % 60)
+        val sign = if (offsetMillis >= 0) "+" else "-"
+        val offsetStr = String.format("%s%02d:%02d", sign, offsetHours, offsetMinutes)
+        
+        return "${dateStr.trim()}T$formattedTime$offsetStr"
+    }
+
+    suspend fun syncEvent(context: Context, event: ScheduleEvent): String? {
+        val prefs = PrefsManager(context)
+        if (!prefs.isCalendarSyncEnabled) {
+            Log.d("CalendarSync", "Sync skipped. Calendar sync is disabled in settings.")
+            return null
+        }
+
+        val token = getFreshAccessToken(context)
+        if (token.isNullOrEmpty()) {
+            Log.d("CalendarSync", "Sync skipped. OAuth token not available.")
+            return null
+        }
+
+        val dateStr = if (!event.specificDate.isNullOrBlank()) {
             event.specificDate
         } else {
             getNextDateForDayOfWeek(event.dayOfWeek)
         }
 
-        val startDateTime = "${dateStr}T${event.startTime}:00"
-        val endDateTime = "${dateStr}T${event.endTime}:00"
+        val startDateTime = formatRfc3339(dateStr, event.startTime)
+        val endDateTime = formatRfc3339(dateStr, event.endTime)
+        val localTimeZoneId = TimeZone.getDefault().id
 
         val bodyJson = JSONObject().apply {
             put("summary", event.title)
@@ -40,11 +94,11 @@ object GoogleCalendarSyncService {
             }
             put("start", JSONObject().apply {
                 put("dateTime", startDateTime)
-                put("timeZone", "Asia/Karachi")
+                put("timeZone", localTimeZoneId)
             })
             put("end", JSONObject().apply {
                 put("dateTime", endDateTime)
-                put("timeZone", "Asia/Karachi")
+                put("timeZone", localTimeZoneId)
             })
             if (event.specificDate == null) {
                 // Repeating weekly event
@@ -60,14 +114,15 @@ object GoogleCalendarSyncService {
 
         return try {
             val response = client.newCall(request).execute()
+            val responseBody = response.body?.string() ?: ""
             if (response.isSuccessful) {
-                val respBody = response.body?.string() ?: ""
-                val respJson = JSONObject(respBody)
+                val respJson = JSONObject(responseBody)
                 val eventId = respJson.optString("id")
                 Log.d("CalendarSync", "Successfully synced event: $eventId")
                 eventId
             } else {
                 Log.e("CalendarSync", "Error syncing event: ${response.code} ${response.message}")
+                Log.e("CalendarSync", "Response body: $responseBody")
                 null
             }
         } catch (e: Exception) {
@@ -78,7 +133,7 @@ object GoogleCalendarSyncService {
 
     suspend fun deleteEvent(context: Context, googleEventId: String) {
         val prefs = PrefsManager(context)
-        val token = prefs.googleAccessToken
+        val token = getFreshAccessToken(context) ?: prefs.googleAccessToken
         if (token.isNullOrEmpty()) return
 
         val request = Request.Builder()
@@ -99,17 +154,17 @@ object GoogleCalendarSyncService {
         }
     }
 
-    private fun getNextDateForDayOfWeek(dayOfWeek: String): String {
+    fun getNextDateForDayOfWeek(dayOfWeek: String): String {
         val dayMap = mapOf(
-            "Monday" to Calendar.MONDAY,
-            "Tuesday" to Calendar.TUESDAY,
-            "Wednesday" to Calendar.WEDNESDAY,
-            "Thursday" to Calendar.THURSDAY,
-            "Friday" to Calendar.FRIDAY,
-            "Saturday" to Calendar.SATURDAY,
-            "Sunday" to Calendar.SUNDAY
+            "monday" to Calendar.MONDAY,
+            "tuesday" to Calendar.TUESDAY,
+            "wednesday" to Calendar.WEDNESDAY,
+            "thursday" to Calendar.THURSDAY,
+            "friday" to Calendar.FRIDAY,
+            "saturday" to Calendar.SATURDAY,
+            "sunday" to Calendar.SUNDAY
         )
-        val targetDay = dayMap[dayOfWeek] ?: Calendar.MONDAY
+        val targetDay = dayMap[dayOfWeek.lowercase().trim()] ?: Calendar.MONDAY
         val calendar = Calendar.getInstance()
         var safety = 0
         while (calendar.get(Calendar.DAY_OF_WEEK) != targetDay && safety < 14) {

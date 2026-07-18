@@ -45,6 +45,7 @@ fun MainDashboardScreen(viewModel: MainViewModel) {
     var selectedDay by remember { mutableStateOf("Monday") }
     var showAddDialog by remember { mutableStateOf(false) }
     var editingEvent by remember { mutableStateOf<ScheduleEvent?>(null) }
+    var deletingEvent by remember { mutableStateOf<ScheduleEvent?>(null) }
 
     val daysOfWeek = listOf("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 
@@ -348,7 +349,7 @@ fun MainDashboardScreen(viewModel: MainViewModel) {
                         EventItemCard(
                             event = event,
                             onEditClick = { editingEvent = event },
-                            onDeleteClick = { viewModel.deleteEvent(event) }
+                            onDeleteClick = { deletingEvent = event }
                         )
                     }
                 }
@@ -358,6 +359,7 @@ fun MainDashboardScreen(viewModel: MainViewModel) {
         // Add Dialog
         if (showAddDialog) {
             AddEditEventDialog(
+                viewModel = viewModel,
                 onDismiss = { showAddDialog = false },
                 onSave = { viewModel.addEvent(it) }
             )
@@ -366,9 +368,49 @@ fun MainDashboardScreen(viewModel: MainViewModel) {
         // Edit Dialog
         if (editingEvent != null) {
             AddEditEventDialog(
+                viewModel = viewModel,
                 event = editingEvent,
                 onDismiss = { editingEvent = null },
                 onSave = { viewModel.updateEvent(it) }
+            )
+        }
+
+        // Delete Confirmation Dialog
+        if (deletingEvent != null) {
+            AlertDialog(
+                onDismissRequest = { deletingEvent = null },
+                title = {
+                    Text(
+                        text = "DELETE EVENT PERMANENTLY?",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 18.sp,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                },
+                text = {
+                    Text(
+                        text = "Are you sure you want to permanently delete \"${deletingEvent?.title}\"? This action cannot be undone and will also remove it from Google Calendar.",
+                        fontSize = 14.sp
+                    )
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            deletingEvent?.let { viewModel.deleteEvent(it) }
+                            deletingEvent = null
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                    ) {
+                        Text("DELETE FOREVER")
+                    }
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = { deletingEvent = null }
+                    ) {
+                        Text("CANCEL")
+                    }
+                }
             )
         }
     }
@@ -459,6 +501,7 @@ fun EventItemCard(
 
 @Composable
 fun AddEditEventDialog(
+    viewModel: MainViewModel,
     event: ScheduleEvent? = null,
     onDismiss: () -> Unit,
     onSave: (ScheduleEvent) -> Unit
@@ -471,8 +514,87 @@ fun AddEditEventDialog(
     var eventType by remember { mutableStateOf(event?.eventType ?: "CLASS") }
     var location by remember { mutableStateOf(event?.location ?: "") }
 
+    var showConflictDialog by remember { mutableStateOf(false) }
+    var conflictsToOverwrite by remember { mutableStateOf<List<ScheduleEvent>>(emptyList()) }
+    var pendingEventToSave by remember { mutableStateOf<ScheduleEvent?>(null) }
+
     val days = listOf("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
     val types = listOf("CLASS", "COACHING", "ACADEMY", "SELF_STUDY", "TEST", "OTHER")
+
+    if (showConflictDialog && pendingEventToSave != null) {
+        AlertDialog(
+            onDismissRequest = { showConflictDialog = false },
+            title = {
+                Text(
+                    text = "SCHEDULING CONFLICT",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp,
+                    color = MaterialTheme.colorScheme.error
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "The following event(s) overlap with this slot. Would you like to delete them and schedule this event in their place?",
+                        fontSize = 14.sp,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    conflictsToOverwrite.forEach { conflict ->
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.2f)),
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(10.dp)) {
+                                Text(
+                                    text = conflict.title,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 13.sp,
+                                    color = MaterialTheme.colorScheme.onErrorContainer
+                                )
+                                Text(
+                                    text = "🕐 ${conflict.dayOfWeek} ${if (conflict.specificDate != null) "(${conflict.specificDate})" else ""} | ${conflict.startTime} - ${conflict.endTime}",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.saveEventOverwritingConflicts(pendingEventToSave!!, conflictsToOverwrite)
+                        showConflictDialog = false
+                        onDismiss()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("DELETE & SAVE")
+                }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(
+                        onClick = {
+                            onSave(pendingEventToSave!!)
+                            showConflictDialog = false
+                            onDismiss()
+                        }
+                    ) {
+                        Text("SAVE ANYWAY")
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    TextButton(
+                        onClick = { showConflictDialog = false }
+                    ) {
+                        Text("CANCEL")
+                    }
+                }
+            }
+        )
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -643,21 +765,27 @@ fun AddEditEventDialog(
                 onClick = {
                     if (title.isNotEmpty() && isDateValid) {
                         val finalDayOfWeek = getDayOfWeekFromDateString(specificDate) ?: selectedDay
-                        onSave(
-                            ScheduleEvent(
-                                id = event?.id ?: 0,
-                                title = title,
-                                dayOfWeek = finalDayOfWeek,
-                                specificDate = specificDate.trim().ifEmpty { null },
-                                startTime = startTime,
-                                endTime = endTime,
-                                eventType = eventType,
-                                location = location.trim().ifEmpty { null },
-                                googleEventId = event?.googleEventId,
-                                isSynced = event?.isSynced ?: false
-                            )
+                        val tempEvent = ScheduleEvent(
+                            id = event?.id ?: 0,
+                            title = title,
+                            dayOfWeek = finalDayOfWeek,
+                            specificDate = specificDate.trim().ifEmpty { null },
+                            startTime = startTime,
+                            endTime = endTime,
+                            eventType = eventType,
+                            location = location.trim().ifEmpty { null },
+                            googleEventId = event?.googleEventId,
+                            isSynced = event?.isSynced ?: false
                         )
-                        onDismiss()
+                        val conflicts = viewModel.getOverlappingEvents(tempEvent)
+                        if (conflicts.isNotEmpty()) {
+                            conflictsToOverwrite = conflicts
+                            pendingEventToSave = tempEvent
+                            showConflictDialog = true
+                        } else {
+                            onSave(tempEvent)
+                            onDismiss()
+                        }
                     }
                 },
                 colors = ButtonDefaults.buttonColors(

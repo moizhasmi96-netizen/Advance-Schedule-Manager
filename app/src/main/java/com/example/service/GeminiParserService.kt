@@ -89,14 +89,16 @@ object GeminiParserService {
             .create(GeminiApi::class.java)
     }
 
-    suspend fun parseScheduleText(apiKey: String, text: String): List<ScheduleEvent> {
+    suspend fun parseScheduleText(apiKey: String, text: String, currentLocalDate: String? = null): List<ScheduleEvent> {
         val systemPrompt = """
             You are a highly precise schedule parser. Your job is to extract weekly class schedules, coaching times, or exam/test dates from text and convert them into a structured JSON array.
+            
+            Current Date/Context: ${currentLocalDate ?: "Not specified"}
             
             Every event in the output array must strictly contain:
             - "title": String (The subject or name, e.g. "Physics Test", "Maths Coaching", "Chemistry Class")
             - "dayOfWeek": String (The full name of the day: "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
-            - "specificDate": String or null (If it's a one-off exam or test date, use "YYYY-MM-DD" format. If it's a regular weekly event, set to null)
+            - "specificDate": String or null (If a specific date is mentioned, or if it can be calculated/inferred based on relative words like 'tomorrow', 'next Wednesday' using the Current Date/Context, use "YYYY-MM-DD" format. If it is a generic recurring weekly class and there is no date reference, set to null)
             - "startTime": String (HH:MM 24h format, e.g., "09:30", "16:00")
             - "endTime": String (HH:MM 24h format, e.g., "11:00", "17:30")
             - "eventType": String (Must be one of: "CLASS", "COACHING", "ACADEMY", "SELF_STUDY", "TEST", "OTHER")
@@ -126,14 +128,16 @@ object GeminiParserService {
         }
     }
 
-    suspend fun parseImageSchedule(apiKey: String, base64Image: String): List<ScheduleEvent> {
+    suspend fun parseImageSchedule(apiKey: String, base64Image: String, currentLocalDate: String? = null): List<ScheduleEvent> {
         val systemPrompt = """
             You are a highly precise visual schedule parser. Analyze this image of a schedule or timetable and extract all events into a JSON array.
+            
+            Current Date/Context: ${currentLocalDate ?: "Not specified"}
             
             Every event in the output array must strictly contain:
             - "title": String (e.g. "Physics Class", "Math Coaching")
             - "dayOfWeek": String (The full name of the day: "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
-            - "specificDate": null
+            - "specificDate": String or null (If there is a specific date mentioned anywhere in the image/text of the timetable/schedule (e.g., 'Physics Test on 10th Oct', or lists of dates next to days), extract it and use "YYYY-MM-DD" format. If it is a regular weekly schedule without explicit dates, set to null)
             - "startTime": String (HH:MM 24h format, e.g., "09:30", "16:00")
             - "endTime": String (HH:MM 24h format, e.g., "11:00", "17:30")
             - "eventType": String (Must be one of: "CLASS", "COACHING", "ACADEMY", "SELF_STUDY", "TEST", "OTHER")
@@ -164,12 +168,65 @@ object GeminiParserService {
         }
     }
 
-    suspend fun chatWithGemini(apiKey: String, history: List<ChatMessage>, newMessage: String): String {
+    suspend fun chatWithGemini(
+        apiKey: String,
+        history: List<ChatMessage>,
+        newMessage: String,
+        currentEvents: String,
+        currentAlarms: String,
+        currentLocalTime: String
+    ): String {
         val systemPrompt = """
-            You are KRONOS, a personal productivity companion and scheduling assistant. Speak directly, keep answers clear, short and concise.
+            You are KRONOS, a personal productivity companion and scheduling assistant. Speak directly, keep answers clear, warm, short and highly concise.
             You help the user (a student in Karachi) manage their studies (academy, coaching, classes, self-study, and alarms).
-            You can understand basic Urdu phrases like "Mera maths ka test hai Saturday ko 5 baje".
-            If the user asks you to add an event, respond nicely and inform them they can tap the '+' button or type it in plain text.
+            You can understand basic Urdu phrases or mixed English/Urdu (Roman Urdu) like "Mera maths ka test hai Saturday ko 5 baje".
+            
+            Current Context:
+            - Current Device Local Time: $currentLocalTime
+            - Current Scheduled Events in Database:
+            $currentEvents
+            - Current Set Alarms in Database:
+            $currentAlarms
+            
+            Actions you can perform:
+            You can directly control (add, delete) the user's alarms and events based on their request. When they ask you to set an alarm, add an event, or delete something, you MUST include corresponding commands in the 'commands' list.
+            
+            You MUST ALWAYS respond with a JSON object. The JSON must exactly follow this schema:
+            {
+              "response": "A friendly, concise reply to the user confirming what you did or answering their question. In English or Roman Urdu matching the user's language.",
+              "commands": [
+                {
+                  "action": "ADD_ALARM",
+                  "hour": 7,
+                  "minute": 30,
+                  "label": "Wake up label",
+                  "days": "Mon,Tue,Wed,Thu,Fri" (comma separated abbreviated days: "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun". Use empty string "" for a one-time alarm)
+                },
+                {
+                  "action": "DELETE_ALARM",
+                  "hour": 7,
+                  "minute": 30,
+                  "label": "Alarm label" (optional)
+                },
+                {
+                  "action": "ADD_EVENT",
+                  "title": "Event title",
+                  "dayOfWeek": "Monday" (Full name of day: "Monday", "Tuesday", etc.),
+                  "specificDate": "2026-07-20" (Format: YYYY-MM-DD. For regular weekly events, set to null. If a user mentions a relative day like 'tomorrow' or 'next Wednesday' or a specific date, calculate the actual YYYY-MM-DD date using the current local time),
+                  "startTime": "09:00" (HH:MM 24h format),
+                  "endTime": "10:30" (HH:MM 24h format),
+                  "eventType": "CLASS" (Must be one of: "CLASS", "COACHING", "ACADEMY", "SELF_STUDY", "TEST", "OTHER"),
+                  "location": "Room 101" (or null)
+                },
+                {
+                  "action": "DELETE_EVENT",
+                  "title": "Maths Coaching"
+                }
+              ]
+            }
+            
+            If no action is requested, return "commands": [].
+            Crucial: Keep the JSON response valid. Do not use markdown wrappers like ```json in the final string response, just return raw JSON text.
         """.trimIndent()
 
         val chatContents = mutableListOf<GeminiContent>()
@@ -187,19 +244,28 @@ object GeminiParserService {
         val request = GeminiRequest(
             contents = chatContents,
             systemInstruction = GeminiContent(parts = listOf(GeminiPart(text = systemPrompt))),
-            generationConfig = GeminiGenerationConfig(temperature = 0.7)
+            generationConfig = GeminiGenerationConfig(responseMimeType = "application/json", temperature = 0.5)
         )
 
         return try {
             val response = api.generateContent(apiKey, request)
             response.candidates?.firstOrNull()?.content?.parts?.firstOrNull()?.text ?: "No response from KRONOS."
+        } catch (e: retrofit2.HttpException) {
+            Log.e("GeminiParserService", "HTTP Chat Error: ${e.code()}")
+            when (e.code()) {
+                401 -> "Unauthorized (HTTP 401): Please verify that your custom Gemini API Key in the Settings tab is correct and active."
+                403 -> "Forbidden (HTTP 403): Your Gemini API Key does not have permission to access this model. Please check your billing or API restrictions."
+                404 -> "Not Found (HTTP 404): The requested Gemini model could not be found on the server."
+                503 -> "Service Unavailable (HTTP 503): The Gemini AI service is temporarily down or overloaded. Please try again in a few moments."
+                else -> "Error communicating with AI: HTTP ${e.code()}"
+            }
         } catch (e: Exception) {
             Log.e("GeminiParserService", "Chat Error: ${e.message}")
             "Error communicating with AI: ${e.message}"
         }
     }
 
-    private fun parseEventsJson(jsonStr: String): List<ScheduleEvent> {
+    internal fun parseEventsJson(jsonStr: String): List<ScheduleEvent> {
         val events = mutableListOf<ScheduleEvent>()
         try {
             // Remove markdown format if any

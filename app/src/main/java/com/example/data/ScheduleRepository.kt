@@ -27,8 +27,13 @@ class ScheduleRepository(private val context: Context) {
     }
 
     suspend fun insertEvent(event: ScheduleEvent) {
-        val id = eventDao.insertEvent(event)
-        val insertedEvent = event.copy(id = id.toInt())
+        val dateEvent = if (event.specificDate.isNullOrBlank()) {
+            event.copy(specificDate = GoogleCalendarSyncService.getNextDateForDayOfWeek(event.dayOfWeek))
+        } else {
+            event
+        }
+        val id = eventDao.insertEvent(dateEvent)
+        val insertedEvent = dateEvent.copy(id = id.toInt())
         
         // Schedule pre-notification for the newly created event
         EventNotificationScheduler.scheduleEventNotification(
@@ -50,7 +55,14 @@ class ScheduleRepository(private val context: Context) {
     }
 
     suspend fun insertEvents(events: List<ScheduleEvent>) {
-        eventDao.insertEvents(events)
+        val dateEvents = events.map { event ->
+            if (event.specificDate.isNullOrBlank()) {
+                event.copy(specificDate = GoogleCalendarSyncService.getNextDateForDayOfWeek(event.dayOfWeek))
+            } else {
+                event
+            }
+        }
+        eventDao.insertEvents(dateEvents)
         val hoursBefore = PrefsManager(context).activityPreNotifyHours
         CoroutineScope(Dispatchers.IO).launch {
             try {
@@ -72,24 +84,29 @@ class ScheduleRepository(private val context: Context) {
     }
 
     suspend fun updateEvent(event: ScheduleEvent) {
-        eventDao.updateEvent(event)
+        val dateEvent = if (event.specificDate.isNullOrBlank()) {
+            event.copy(specificDate = GoogleCalendarSyncService.getNextDateForDayOfWeek(event.dayOfWeek))
+        } else {
+            event
+        }
+        eventDao.updateEvent(dateEvent)
         
         // Cancel old and schedule new pre-notification
-        EventNotificationScheduler.cancelEventNotification(context, event)
+        EventNotificationScheduler.cancelEventNotification(context, dateEvent)
         EventNotificationScheduler.scheduleEventNotification(
             context, 
-            event, 
+            dateEvent, 
             PrefsManager(context).activityPreNotifyHours
         )
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                if (event.googleEventId != null) {
-                    GoogleCalendarSyncService.deleteEvent(context, event.googleEventId)
+                if (dateEvent.googleEventId != null) {
+                    GoogleCalendarSyncService.deleteEvent(context, dateEvent.googleEventId)
                 }
-                val googleEventId = GoogleCalendarSyncService.syncEvent(context, event)
+                val googleEventId = GoogleCalendarSyncService.syncEvent(context, dateEvent)
                 if (googleEventId != null) {
-                    eventDao.updateEvent(event.copy(googleEventId = googleEventId, isSynced = true))
+                    eventDao.updateEvent(dateEvent.copy(googleEventId = googleEventId, isSynced = true))
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
